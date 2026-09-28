@@ -1,0 +1,388 @@
+{
+  "api": {
+    "base": "https://norzavi.com/api/v1",
+    "capabilities": "https://norzavi.com/api/v1/capabilities",
+    "drift_rule": "On HTTP 400 or any schema mismatch, re-fetch live capabilities before proceeding. A local capabilities snapshot is never the contract.",
+    "field_optionality": "Which inputs are required vs. optional is read from the live capabilities endpoint, never from memory.",
+    "openapi": "https://norzavi.com/api/v1/openapi.json",
+    "operations": [
+      "budget",
+      "safety",
+      "emergency",
+      "debt_payoff",
+      "savings_rate",
+      "growth",
+      "shared_bill",
+      "goal_timeline"
+    ],
+    "pinned_version": "0.1.0"
+  },
+  "autonomy": {
+    "levels": {
+      "1": {
+        "data_access": "none",
+        "may": [
+          "answer questions using the method",
+          "show examples with hypothetical figures"
+        ],
+        "name": "explain"
+      },
+      "2": {
+        "data_access": "approved numeric inputs only",
+        "may": [
+          "run Calculator API operations on approved numeric inputs",
+          "show inputs with provenance, the result, and the API's assumptions"
+        ],
+        "name": "calculate"
+      },
+      "3": {
+        "data_access": "approved numeric inputs only",
+        "may": [
+          "generate calendar event drafts or ICS files for user review",
+          "generate shared-plan snapshot drafts for user review (only if the snapshot contract is implemented)"
+        ],
+        "name": "draft",
+        "rule": "Drafts are previews. Nothing is written to any calendar until the user approves the specific draft."
+      },
+      "4": {
+        "may": [
+          "refresh previously approved events on the user's explicitly chosen schedule (e.g. the daily morning flip)"
+        ],
+        "name": "maintain",
+        "requires": "an explicit schedule chosen by the user, naming which event types refresh",
+        "rule": "Maintenance covers only event types the user approved. New event types always return to level 3 first."
+      }
+    },
+    "never": [
+      "initiate payments, transfers, or trades",
+      "open, close, or modify financial accounts",
+      "change investments or allocations",
+      "incur charges on the user's behalf",
+      "store raw transactions, account numbers, names, or documents",
+      "send user financial data to any party not named in the current task"
+    ],
+    "note": "Autonomy levels govern what an agent may do. Each level is separately chosen by the user; choosing a level never grants the levels above it.",
+    "stop_and_ask": [
+      "A merchant, transfer, or recurring item cannot be classified with confidence — show the item and the proposed treatment, wait for approval.",
+      "The source, scope, or figures changed since the last approval — reconfirm before reusing prior approval.",
+      "A calendar write would conflict with or replace existing events — preview the replacement first.",
+      "Math or export fails — preserve the last known-good state, report the failure plainly, do not retry destructively."
+    ]
+  },
+  "buckets": {
+    "checking": "The spending sensor. Safe-to-spend is computed from this account only.",
+    "computation": "safe_to_spend = max(raw_safe, 0) − reserve_floor_buffer, where raw_safe = current checking balance + in-horizon paychecks not yet arrived − in-horizon bills not yet posted − in-horizon scheduled non-spend transfers. reserve_floor_buffer = max(0, min(max(raw_safe, 0), monthly_essentials − reserve_balance)); reserve_balance is 0 when no reserve is on record (null amounts count as 0 for the sum). When a healthy reserve (≥ one month of monthly_essentials) is on record, the buffer is 0 and the computation reduces exactly to the v0.1 formula. 'In-horizon' means arriving/due on or before month-end. An arrived paycheck is inside the current balance and is never added again; a posted bill is inside the current balance and is never subtracted again. Reserve money is never counted as spendable; the recorded reserve amount only sizes the floor buffer and the Shield.",
+    "protected_reserve": "Emergency savings held in a separate bucket (e.g. M1 Finance). Excluded from safe-to-spend entirely.",
+    "scheduled_non_spend_transfers": "Recurring transfers out of checking that are not spendable: emergency-reserve transfers AND recurring investment transfers (e.g. a monthly Roth IRA transfer). They appear once as a forward commitment in the safe-to-spend subtraction and once as observed spend in month-to-date reporting — this dual appearance is intentional, not double-counting."
+  },
+  "calendar": {
+    "colors": {
+      "1": {
+        "name": "lavender",
+        "use": "monthly spending report events"
+      },
+      "2": {
+        "name": "sage",
+        "use": "paycheck events"
+      },
+      "4": {
+        "name": "flamingo",
+        "use": "the CURRENT day's daily balance event only (or the fixture's as_of_date in drafts)"
+      },
+      "5": {
+        "name": "banana",
+        "use": "food / weekly spending report events"
+      },
+      "7": {
+        "name": "peacock",
+        "use": "recurring bill events"
+      },
+      "8": {
+        "name": "graphite",
+        "use": "older daily balance events (history)"
+      }
+    },
+    "event_block": {
+      "end": "12:00",
+      "rule": "ALL Finance calendar events use 6:00 AM–12:00 PM local blocks. The large block exists so events are easy to tap on a phone. Never use shorter blocks.",
+      "start": "06:00"
+    },
+    "event_placement": {
+      "bill": "Bill events are placed ON the due date. They are due-date markers, not advance reminders.",
+      "paycheck": "Paycheck events are placed ON the expected arrival date."
+    },
+    "note_bodies": {
+      "bill_event": [
+        "Line 1: Due: <DOW MON DD>",
+        "Line 2: <cadence> — <label> (e.g. 'Monthly — car payment')",
+        "Line 3: Amount: $<amount> (<provenance>)"
+      ],
+      "paycheck_event": [
+        "Line 1: Arrives: <DOW MON DD>",
+        "Line 2: <cadence> (e.g. 'Biweekly')",
+        "Line 3: Amount: $<amount> (<provenance>)"
+      ]
+    },
+    "note_layout": {
+      "balance_pair": {
+        "format": "Two labeled lines, no blank line between them:",
+        "lines": [
+          "Current: $<amount>",
+          "Available: $<amount>"
+        ]
+      },
+      "daily_balance_note": [
+        "Line 1: $<amount> safe to spend — when the reserve floor buffer (reserve.floor_rule) is greater than 0, Line 1 MUST instead use exactly one of the three statements in reserve.floor_rule.statement_selection (no-reserve / amount-unconfirmed / partial-reserve), selected per that rule — never default to the no-reserve wording when a reserve is on record.",
+        "Line 2: SAFE TILL <MON DD> — $<amount> safe (amount next to the heading, NEVER alone on the final line)",
+        "Optional: safety-target line directly after the SAFE TILL line, with no blank line between them",
+        "Shield section: the two Shield lines per shield.report_section, directly after the safety-target line — or directly after the SAFE TILL block when no safety-target line is present — with no blank line between. No separate heading line.",
+        "Then one blank line, then current vs. available balance (balance_pair format)",
+        "Then the 'Upcoming bills:' section",
+        "Then the 'Next paycheck:' section",
+        "Then the 'Month-to-date spending:' section (the 8 monthly categories, amount-first rows, ending with the divider and combined total row)",
+        "Then the watch line (single line, no separate heading)"
+      ],
+      "note_scope": "Every daily balance event in a fixture or draft carries the full daily_balance_note structure, including non-as_of days.",
+      "divider": "A divider is exactly 14 U+2500 characters: ──────────────",
+      "row_format": "$<amount>  <label> (<n> charges) — e.g. '$129.85  Fast food (3 charges)'",
+      "row_spacing": "One blank line between rows. Amounts stay on a stable left edge; do not use space-padded columns (phone calendar notes use proportional fonts).",
+      "safe_till_block": {
+        "example": "SAFE TILL SEP 30 — $1,047.41 safe",
+        "format": "SAFE TILL <MON DD> — $<amount> safe",
+        "placement": "Directly under the safe-to-spend figure.",
+        "rule": "The safe amount always sits next to the heading. It must never appear alone on the final line of the block."
+      },
+      "safety_target_line": {
+        "format": "Safety target (starter floor): $<target> — $<remaining> to go, or '— covered' when saved >= target.",
+        "placement": "In the month-end summary, after the SAFE TILL block.",
+        "value_source": "The target comes from the Calculator API 'safety' operation; in fixtures it is a stipulated hypothetical figure. The 'saved' figure is the same operation's 'saved' input (same provenance); in fixtures it is stipulated. Referencing the reserve's saved balance here is one of two permitted exceptions to 'reserve balance never appears' — the other is the Shield section. It appears as progress toward the target, never as spendable money."
+      },
+      "section_headings": [
+        "Upcoming bills:",
+        "Next paycheck:",
+        "Month-to-date spending:"
+      ],
+      "section_spacing": "One blank line between sections. One blank line also separates a section heading from its first row.",
+      "empty_section": "When a section has no rows, render the heading, one blank line, then the single line 'none'.",
+      "watch_section": "The watch section is the single watch_line alone (format 'Watch: ...'); it is NOT preceded by a separate 'Watch:' heading line.",
+      "sort": "Highest spend at top, lowest at bottom. $0 lines go last; among $0 lines keep the canonical category_lines order.",
+      "style": "amount-first, one line per item",
+      "total": "Combined total goes last, after a divider line. Total row format: '$<amount>  Total' — no charge count, e.g. '$940.00  Total'.",
+      "charge_count_grammar": "Use '(1 charge)' for exactly one charge; '(0 charges)' and '(n charges)' otherwise. Character-exact grammar matters for the portability gate.",
+      "upcoming_bill_row": "<MON DD> — $<amount>  <label> — e.g. 'OCT 09 — $497.39  Huntington car payment'. A bill due today stays listed with ' (due today)' appended until observed posted.",
+      "upcoming_paycheck_row": "<MON DD> — $<amount>  <label> — e.g. 'OCT 13 — $2,688.39  Paycheck'. No plus sign; direction is clear from the label and section. A paycheck arriving today stays listed with ' (arriving today)' appended until observed arrived.",
+      "next_paycheck_scope": "The 'Next paycheck:' section always shows the next expected paycheck, even when it falls past the month-end horizon. Only in-horizon, not-yet-arrived paychecks enter the safe-to-spend addition. When the user states no paycheck is expected at all (rather than merely unknown), the section's single line renders as 'none expected' instead of 'none'.",
+      "watch_line": {
+        "format": "Watch: <description> — $<amount> (<reason>), or 'Watch: none' when nothing qualifies.",
+        "selection": "Flag the largest unrecognized-merchant charge, any duplicate charge, any charge the classifier could not categorize, or any single non-recurring charge at or above the user's watch threshold (default $250.00, hypothetical; the user may change it). Known recurring bills and transfers are never watch-flagged for their amount alone."
+      }
+    },
+    "sign_conventions": {
+      "note_body_rows": "Unsigned; direction is clear from the section context.",
+      "outflow_aggregate_titles": "A leading minus marks money-out aggregates, e.g. '-$11.40 Food report (pending)'.",
+      "rule": "Titles for outflow aggregates (spending reports) carry a leading minus. Balance, paycheck, bill, and safe figures are unsigned — direction is clear from the label."
+    },
+    "timezone": "The user's timezone is a required setup input. The agent must ask the user for it before generating any calendar output and record it in the fixture or setup. Never assume a timezone silently; if the user declines to give one, use UTC and label it as assumed. In a userless validation fixture, the timezone is a stipulated fixture parameter (per fixture_schema) — declaring it satisfies the no-silent-assumption rule."
+  },
+  "data_minimization": {
+    "api_inputs": "Only the operation's numeric inputs ever leave the machine for the Calculator API.",
+    "connected_source_use": "Use only data relevant to the question. State the source and date range. Show derived monthly figures plus uncertain classifications for review before proceeding.",
+    "forbidden_in_api_calls": [
+      "names",
+      "account numbers",
+      "transaction descriptions",
+      "raw transactions",
+      "documents",
+      "file contents"
+    ],
+    "uncertain_classifications": "Ambiguous merchants, transfers, and recurring items stay unresolved until the user approves a treatment. Never silently assume."
+  },
+  "drafting_and_fixtures": {
+    "as_of_date": {
+      "flamingo_rule": "In any fixture or draft, exactly one day is the fixture's 'today' (as_of_date, required). That day's balance event is flamingo; every other balance event in the fixture is grey.",
+      "required": "Every fixture and every multi-day draft MUST declare as_of_date (ISO date)."
+    },
+    "fixture_actuals": "A fixture's stipulated figures are the fixture's actuals. Hypothetical drafts may use amount-first titles; the draft metadata must carry provenance: hypothetical.",
+    "fixture_schema": {
+      "fields": [
+        "as_of_date (ISO date, required)",
+        "timezone (required)",
+        "figures[] — each with key, amount, and provenance (all hypothetical in fixtures)",
+        "expected_events[] — the event set the fixture should produce",
+        "reserve — holdings[] per the reserve record_fields: each {where, amount, liquidity_note?} (stipulated hypothetical in fixtures; empty list = 'no reserve on record')",
+        "shield_target — 'starter' or 'job_loss' (default 'starter')"
+      ],
+      "versioned": true
+    },
+    "required_setup_inputs": [
+      "timezone",
+      "as_of_date for any fixture or draft"
+    ]
+  },
+  "glossary": {
+    "month_end_horizon": "The budgeting horizon is fixed at the last day of the current calendar month. It is not extended by arriving income; income arriving within the horizon increases the safe amount instead.",
+    "paycheck": "Expected income deposit on a known schedule. Paychecks expected to arrive on or before month-end that have NOT yet arrived are ADDED to safe-to-spend (they are money the user will have within the horizon). Once a paycheck is observed arrived, it lives in the current balance: it drops off the upcoming list and is never added again.",
+    "protected_reserve": "Emergency savings held in a separate bucket (e.g. M1 Finance). Excluded from safe-to-spend entirely — never counted as spendable. Its user-entered recorded holdings are used only to size the reserve floor buffer (via reserve_balance) and the Shield. Only the monthly transfer into it appears in the system, shown like a bill.",
+    "recurring_bill": "A bill expected on a known schedule (e.g. car payment, insurance, subscriptions). Bills due on or before month-end are SUBTRACTED from safe-to-spend.",
+    "safe_till": "A dated statement of how much is safe to spend through the horizon end (normally month-end), always shown with the amount next to the heading.",
+    "safe_to_spend": "Money available through the month-end horizon: max(raw_safe, 0) minus the reserve floor buffer (see reserve.floor_rule). raw_safe = current checking balance, plus in-horizon paychecks not yet arrived, minus in-horizon bills not yet posted and in-horizon scheduled non-spend transfers. A healthy reserve on record (≥ one month of essentials) means no buffer; with no reserve on record, up to one month of essentials is held back and stated explicitly on Line 1.",
+    "monthly_essentials": "The user's monthly essential spend, from the Calculator API 'safety' operation input (user-entered or connected-source-derived); stipulated hypothetical in fixtures. Sizes the reserve floor buffer and the Shield levels.",
+    "reserve_floor_buffer": "max(0, min(max(raw_safe, 0), monthly_essentials − reserve_balance)). Money held back from the safe figure when no healthy reserve is on record; always stated explicitly on Line 1 of the daily note.",
+    "shield": "Reserve-health visualization: shield_fill = reserve_balance ÷ shield_target_amount, with named levels unshielded / building / guarded / shielded. Rendered as a two-line section in the daily balance note per shield.report_section; visual details pinned in visual-spec.md.",
+    "reserve_holdings": "the user's declared emergency-reserve holdings list: [{where, amount, liquidity_note?}]; empty list = no reserve on record; amount=null per holding = amount-unconfirmed; user-entered, never verified; the agent never judges what counts as a reserve"
+  },
+  "kit": "norzavi-method-kit",
+  "kit_version": "0.2.1",
+  "philosophy": [
+    "no-login: the method never requires user accounts",
+    "no-backend: no server stores user financial data",
+    "local-first: raw transactions and documents stay on the user's machine",
+    "stateless-math: all calculations go through the pinned Calculator API; the kit never duplicates its math in production",
+    "no-money-movement: the kit never initiates payments, transfers, trades, or account changes",
+    "labeled-figures: every example figure is hypothetical/sample and labeled as such; sample numbers are never presented as real"
+  ],
+  "provenance": {
+    "labels": [
+      "hypothetical",
+      "user-entered",
+      "connected-source-derived"
+    ],
+    "rules": [
+      "Label every figure with exactly one provenance label.",
+      "hypothetical: sample or placeholder values. All kit examples and fixtures are hypothetical.",
+      "user-entered: typed by the user in the conversation.",
+      "connected-source-derived: actually pulled from a named connected source for that specific calculation.",
+      "Never claim a connected source was accessed unless it was actually accessed for that calculation.",
+      "Never treat a prior example or hypothetical run as the user's current finances.",
+      "When provenance is uncertain, say so instead of guessing.",
+      "Approved figures may be reused for follow-up what-if calculations in the same conversation, unless the source, scope, or figures materially change — then re-confirm."
+    ]
+  },
+  "refresh_rules": {
+    "actuals_only": "Every figure shown is an actually observed value. If source data is stale, say so plainly, show actuals only, and offer the fastest path to a fresh number (user-typed figure or alert check). Never fill a data gap with an estimate.",
+    "daily_flip": "LEVEL-4-GATED. Only under an explicitly user-chosen level-4 maintenance schedule: each morning, create today's balance event in flamingo (4) and flip yesterday's event from flamingo (4) back to grey (8). Exactly one flamingo balance event exists at any time while the refresh runs with actuals.",
+    "pending_refresh": "Refresh pending report titles and notes each morning with actuals only.",
+    "posted_bills_drop_off": "Once a bill is observed posted in actuals, remove it from the upcoming-bills list; it then appears in month-to-date spending instead. 'Observed posted' means the charge appears in actuals from the user's named source, or the user confirms it posted; in fixtures it is stipulated.",
+    "posted_paychecks_drop_off": "Once a paycheck is observed arrived in actuals, remove it from the 'Next paycheck:' list; it then lives in the current balance and is never added to safe-to-spend again. 'Observed arrived' means the deposit appears in actuals from the user's named source, or the user confirms it arrived; in fixtures it is stipulated.",
+    "protected_transfer": "The monthly transfer to the protected reserve appears as a bill-like line; the reserve balance itself never appears in spendable figures. Its recorded amount appears only as the Shield's reserve figure and the safety-target line's 'saved' input — progress/health, never spendable.",
+    "stale_data": "If no fresh actuals are available, do NOT fabricate a new flamingo event. Create nothing, report the staleness plainly ('data stale since <date>'), and offer the fastest path to fresh numbers."
+  },
+  "report_types": {
+    "daily_balance": {
+      "cadence": "every morning",
+      "color": 4,
+      "contents": [
+        "safe-to-spend",
+        "safe-till-month-end",
+        "shield section (reserve health)",
+        "current vs available balance",
+        "dated upcoming bills + next paycheck",
+        "month-to-date spending (the 8 monthly categories)",
+        "transaction to watch"
+      ],
+      "mtd_categories": "The daily note's month-to-date section uses the same 8 category lines as the monthly report.",
+      "divider_spacing": "The 14-─ divider sits directly under the last row with no blank line between; the combined-total row sits directly under the divider with no blank line between; one blank line follows the total. Applies to the daily month-to-date section and the weekly food report."
+    },
+    "monthly_spending": {
+      "cadence": "monthly, on the 1st",
+      "category_lines": [
+        "Finance (investment transfers)",
+        "Work food",
+        "Fast food (non-work)",
+        "Fuel",
+        "Amazon",
+        "Car maintenance",
+        "Other living costs",
+        "Other Apple Pay costs"
+      ],
+      "color": 1,
+      "food_mapping": "Weekly food categories roll up into monthly lines: Work food → Work food; Dining out + Coffee → Fast food (non-work); Groceries → Other living costs.",
+      "rule": "Each line shows the total and number of charges. Actuals only.",
+      "bill_category_mapping": "A posted bill that matches no named category rolls up into 'Other living costs' (e.g. a posted car payment). 'Finance (investment transfers)' is only for investment and reserve transfers."
+    },
+    "weekly_food": {
+      "cadence": "weekly",
+      "categories": [
+        "Groceries",
+        "Dining out",
+        "Coffee",
+        "Work food"
+      ],
+      "color": 5,
+      "contents": [
+        "amount-first category rows sorted high-to-low",
+        "combined total after divider",
+        "SAFE TILL block carrying the refresh day's safe-to-spend figure (the figure computed on the morning the report is refreshed)",
+        "no safety-target line in the weekly note"
+      ],
+      "finalization": "On the Monday morning refresh after week-end, the Sunday event is finalized: the title drops '(pending)' and keeps the final actual total with its minus sign, e.g. '-$198.20 Food report'.",
+      "further_out_weeks": "Sundays beyond the current week are plain placeholders titled 'Food report' with NO amounts.",
+      "pending": "During the week, the upcoming Sunday carries the pending report titled '-$<week-to-date actual> Food report (pending)' (banana), refreshed each morning with actuals only.",
+      "placement": "One event per week, placed on Sunday (end of week).",
+      "week_boundary": "Weeks run Monday–Sunday.",
+      "divider_spacing": "The combined-total divider follows the same spacing as the daily note: divider directly under the last category row (no blank line), total directly under the divider (no blank line), one blank line after."
+    }
+  },
+  "reserve": {
+    "setup_questions": [
+      "Do you have an emergency or safety reserve set aside?",
+      "Where do you keep it? It can be more than one place — a savings account, another platform, cash at home.",
+      "Roughly how much is in each place? \"I'm not sure of the exact amount\" is a fine answer for any of them."
+    ],
+    "setup_rule": "Ask the questions before generating calendar output, inviting multiple holdings. Answers are user-entered, never verified. The agent never judges what counts as a reserve — any user-declared holding counts. Keep it simple: no account-type taxonomy, no verification. If the user declines all questions, record an empty holdings list ('no reserve on record') and say so plainly. Each declared holding is recorded as given: {where, amount, liquidity_note?}. A holding whose amount the user won't state is recorded amount=null (amount-unconfirmed). Holdings with amount 0 are dropped from the record. The holdings list plus monthly_essentials are required to apply the floor.",
+    "record_fields": {
+      "holdings": "list of {where: optional free-text string naming the location (e.g. 'M1 Finance', 'Ally HYSA', 'cash envelope'); omit when the user doesn't name one; amount: number, or null when the user won't state it (amount-unconfirmed); liquidity_note: optional free-text string (e.g. 'takes two days to move')}. Empty list = no reserve on record.",
+      "provenance": "always 'user-entered'"
+    },
+    "derived": {
+      "reserve_balance": "sum of holding amounts, treating null as 0 for the sum",
+      "amount_unconfirmed": "true when at least one holding has amount=null",
+      "confirmed_balance": "sum of holding amounts excluding nulls — numerically identical to reserve_balance; tracked separately so statements and the Shield can cite the confirmed figure explicitly"
+    },
+    "monthly_essentials_source": "monthly_essentials is the Calculator API 'safety' operation input (user-entered or connected-source-derived); in fixtures it is a stipulated hypothetical figure. It sizes both the floor buffer and the Shield levels.",
+    "healthy_threshold": "A reserve is 'healthy' when reserve_balance is ≥ one month of monthly_essentials.",
+    "floor_rule": {
+      "buffer": "reserve_floor_buffer = max(0, min(max(raw_safe, 0), monthly_essentials − reserve_balance))",
+      "safe_to_spend": "max(raw_safe, 0) − reserve_floor_buffer",
+      "no_reserve_statement": "$<safe_to_spend> safe to spend — $<reserve_floor_buffer> held back as a starter buffer because no emergency reserve is on record.",
+      "healthy_reserve": "When a healthy reserve_balance is on record, Line 1 stays '$<safe> safe to spend' and the Shield section states the reserve basis.",
+      "partial_reserve_statement": "$<safe_to_spend> safe to spend — $<reserve_floor_buffer> held back as a starter buffer because the recorded reserve ($<reserve_balance>) is below one month of essentials.",
+      "unknown_amount_statement": "$<safe_to_spend> safe to spend — $<reserve_floor_buffer> held back as a starter buffer because the reserve amount is unconfirmed.",
+      "statement_selection": "When reserve_floor_buffer > 0, Line 1 uses exactly one of: no_reserve_statement (holdings list empty — no reserve on record), unknown_amount_statement (at least one holding has amount=null — the reserve exists but its amount is unconfirmed), partial_reserve_statement (0 < reserve_balance < monthly_essentials with all amounts confirmed). When buffer = 0, Line 1 is the plain amount.",
+      "floor_ignores_target": "The floor is sized by monthly_essentials only and intentionally ignores shield_target: the buffer protects the next month regardless of the long-term safety target. The phrase 'starter buffer' in all Line-1 statements refers to this one-month starter protection and is used even when shield_target is 'job_loss'."
+    }
+  },
+  "shield": {
+    "concept": "The Shield visualizes reserve health: how much backup exists relative to the user's safety target. It answers at a glance how long the backup lasts if spending had to stop.",
+    "target_selection": "At setup, record shield_target: 'starter' (the safety operation's target — the starter floor) or 'job_loss' (N months of monthly_essentials via the emergency operation; N chosen by the user, e.g. 4–6). Default is 'starter' unless the user chooses otherwise.",
+    "fill": "reserve_balance ÷ shield_target_amount. Fill may exceed 1. Displayed percent = min(100, round_half_up(fill × 100)). Tie-breaking is round half up throughout (0.5 rounds away from zero). The fill bar is derived from the DISPLAYED percent, so the number and the picture are consistent by construction.",
+    "levels": {
+      "unshielded": "holdings list empty (no reserve on record), or at least one holding amount-unconfirmed",
+      "building": "0 < reserve < one month of monthly_essentials",
+      "guarded": "one month of monthly_essentials ≤ reserve < shield_target_amount",
+      "shielded": "reserve ≥ shield_target_amount",
+      "guarded_note": "When shield_target_amount ≤ monthly_essentials, the guarded band is empty by construction (a reserve ≥ essentials is simultaneously healthy and ≥ target, jumping straight from building to shielded). The four levels remain well-defined and exhaustive; guarded is meaningful when the target exceeds one month of essentials (e.g. job-loss targets)."
+    },
+    "report_section": {
+      "placement": "In the daily balance note, directly after the safety-target line (or directly after the SAFE TILL block when no safety-target line is present), with no blank line between. The two Shield lines ARE the section — no separate 'Shield:' heading line precedes them (same pattern as the watch line). Then one blank line, then the balance pair.",
+      "line_1": "Shield: <icon> <level> — $<reserve> of $<target> <target_name> target — e.g. 'Shield: 🛡️ guarded — $2,500.00 of $14,400.00 job-loss target'.",
+      "line_1_no_reserve": "Shield: <icon> unshielded — no emergency reserve on record",
+      "line_1_where": "' (<w1>, <w2>, ...)' is appended after the target name, joining the where-values of all holdings that have one, in declaration order — e.g. ' (M1 Finance, cash envelope)'. The no-reserve line never carries one — there is nothing to cite. On the amount-unconfirmed line, the join covers only the holdings whose amount is null (the ones whose amount is actually unconfirmed) — e.g. ' (cash)'; if none of those have a where, the parenthetical is omitted.",
+      "line_2": "'▓' repeated min(10, round_half_up(displayed_pct ÷ 10)), then '░' to 10 characters, then a space and '<displayed_pct>%'. No-reserve: '░░░░░░░░░░ 0%'. Amount-unconfirmed: '░░░░░░░░░░ 0%'.",
+      "target_name": "'starter' when shield_target is 'starter'; 'job-loss' when shield_target is 'job_loss'.",
+      "icon": "Pinned in visual-spec.md: 🛡️ (U+1F6E1 U+FE0F).",
+      "line_1_amount_unknown": "'Shield: <icon> unshielded — reserve amount unconfirmed', plus ' (<where>)' when the user gave one, e.g. 'Shield: 🛡️ unshielded — reserve amount unconfirmed (M1 Finance)'."
+    }
+  },
+  "status": "release-ready",
+  "title_format_rules": {
+    "amount_format": "Two decimals always, e.g. $497.39, $130.00, $2,688.39.",
+    "daily_balance_title": "The daily balance event title uses the CURRENT balance: '$<current> balance', e.g. '$1,580.65 balance'.",
+    "general": "Lead with the amount. Pattern: $<amount> <label>."
+  },
+  "validation": {
+    "golden_fixtures": "Keep versioned hypothetical fixtures (per drafting_and_fixtures.fixture_schema) covering: refunds, transfers between own accounts, pending charges, month-boundary dates, reruns of the same fixture, and full calendar replacement. Reserve scenarios: (a) healthy off-platform reserve on record — no floor buffer, Shield renders at the correct level; (b) no reserve on record with $500.00 checking and no in-horizon items — the full $500.00 is held back, Line 1 carries the explicit no-reserve statement, Shield renders unshielded; (c) partial reserve below one month of essentials — reduced buffer of (essentials − reserve).",
+    "hand_arithmetic_exception": "Validation fixtures are the ONE permitted exception to the no-hand-math rule: a files-only validator with no API access may compute fixture arithmetic by hand, with every figure labeled hypothetical. Production runs with user figures always go through the Calculator API.",
+    "portability_gate": "The same approved hypothetical fixture must produce the same result in every runtime before release. 'The same' means: identical event set (titles, 6 AM–12 PM blocks, colorIds) and identical note bodies character-for-character, excluding run timestamps. Any difference stops the release."
+  }
+}
